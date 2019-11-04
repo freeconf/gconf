@@ -231,6 +231,8 @@ func toUInt8(val interface{}) (uint8, error) {
 		return uint8(x), nil
 	case uint8:
 		return x, nil
+	case int64:
+		return uint8(x), nil
 	default:
 		i, err := toInt32(val)
 		if err == nil && i > 0 && i < 2^8 {
@@ -492,6 +494,10 @@ func toUInt32(val interface{}) (uint, error) {
 	case int32:
 		return uint(x), nil
 	case uint32:
+		return uint(x), nil
+	case int64:
+		return uint(x), nil
+	case uint64:
 		return uint(x), nil
 	case int:
 		return uint(x), nil
@@ -848,6 +854,8 @@ func toBool(val interface{}) (bool, error) {
 
 func toString(val interface{}) (string, error) {
 	switch x := val.(type) {
+	case string:
+		return x, nil
 	case float64:
 		// wrong format, truncating decimals as most likely mistake but
 		// will not please everyone.  Get input in correct format by placing
