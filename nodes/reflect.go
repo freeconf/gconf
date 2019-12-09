@@ -7,7 +7,6 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/freeconf/gconf/c2"
 	"github.com/freeconf/gconf/meta"
 	"github.com/freeconf/gconf/node"
 	"github.com/freeconf/gconf/val"
@@ -22,7 +21,18 @@ import (
 type Reflect struct {
 	OnChild OnReflectChild
 	OnList  OnReflectList
+
+	// When writing to map[], serialize enums and enum lists as one of 3 different options
+	EnumFieldsAs WriteEnumAs
 }
+
+type WriteEnumAs int
+
+const (
+	WriteEnumAsEnum = iota
+	WriteEnumAsId
+	WriteEnumAsLabel
+)
 
 func ReflectChild(obj interface{}) node.Node {
 	return Reflect{}.child(reflect.ValueOf(obj))
@@ -278,7 +288,6 @@ func (self Reflect) listMap(v reflect.Value) node.Node {
 type OnListValueChange func(update reflect.Value)
 
 func (self Reflect) childMap(v reflect.Value) node.Node {
-	k := v.Type().Key()
 	e := v.Type().Elem()
 	return &Basic{
 		Peekable: v.Interface(),
@@ -297,55 +306,66 @@ func (self Reflect) childMap(v reflect.Value) node.Node {
 			return nil, nil
 		},
 		OnChild: func(r node.ChildRequest) (node.Node, error) {
-			switch k.Kind() {
-			case reflect.String:
-				mapKey := reflect.ValueOf(r.Meta.Ident())
-				var childInstance reflect.Value
-				if r.New {
-					childInstance = self.create(e)
-					v.SetMapIndex(mapKey, childInstance)
-				} else if r.Delete {
-					// how you call delete(key) on map thru reflection
-					v.SetMapIndex(mapKey, reflect.Value{})
-					return nil, nil
-				} else {
-					childInstance = v.MapIndex(mapKey)
-				}
-				if meta.IsList(r.Meta) {
-					onUpdate := func(update reflect.Value) {
-						v.SetMapIndex(mapKey, update)
-					}
-					return self.list(childInstance, onUpdate), nil
-				} else {
-					return self.child(childInstance), nil
-				}
-			default:
-				return nil, c2.NewErr("key type not supported " + k.String())
+			mapKey := reflect.ValueOf(r.Meta.Ident())
+			var childInstance reflect.Value
+			if r.New {
+				childInstance = self.create(e)
+				v.SetMapIndex(mapKey, childInstance)
+			} else if r.Delete {
+				// how you call delete(key) on map thru reflection
+				v.SetMapIndex(mapKey, reflect.Value{})
+				return nil, nil
+			} else {
+				childInstance = v.MapIndex(mapKey)
 			}
-			return nil, nil
+			if meta.IsList(r.Meta) {
+				onUpdate := func(update reflect.Value) {
+					v.SetMapIndex(mapKey, update)
+				}
+				return self.list(childInstance, onUpdate), nil
+			}
+			return self.child(childInstance), nil
 		},
 		OnField: func(r node.FieldRequest, hnd *node.ValueHandle) error {
-			switch k.Kind() {
-			case reflect.String:
-				mapKey := reflect.ValueOf(r.Meta.Ident())
-				if r.Write {
-					if r.Clear {
-						v.SetMapIndex(mapKey, reflect.Value{})
-					} else {
-						v.SetMapIndex(mapKey, reflect.ValueOf(hnd.Val.Value()))
-					}
+			mapKey := reflect.ValueOf(r.Meta.Ident())
+			if r.Write {
+				if r.Clear {
+					v.SetMapIndex(mapKey, reflect.Value{})
 				} else {
-					fval := v.MapIndex(mapKey)
-					if fval.IsValid() {
-						var err error
-						hnd.Val, err = node.NewValue(r.Meta.Type(), fval.Interface())
-						if err != nil {
-							return err
+					var x interface{}
+					switch r.Meta.Type().Format() {
+					case val.FmtEnum:
+						switch self.EnumFieldsAs {
+						case WriteEnumAsId:
+							x = hnd.Val.(val.Enum).Id
+						case WriteEnumAsLabel:
+							x = hnd.Val.(val.Enum).Label
+						default:
+							x = hnd.Val
 						}
+					case val.FmtEmptyList:
+						switch self.EnumFieldsAs {
+						case WriteEnumAsId:
+							x = hnd.Val.(val.EnumList).Ids()
+						case WriteEnumAsLabel:
+							x = hnd.Val.(val.EnumList).Labels()
+						default:
+							x = hnd.Val
+						}
+					default:
+						x = hnd.Val.Value()
+					}
+					v.SetMapIndex(mapKey, reflect.ValueOf(x))
+				}
+			} else {
+				fval := v.MapIndex(mapKey)
+				if fval.IsValid() {
+					var err error
+					hnd.Val, err = node.NewValue(r.Meta.Type(), fval.Interface())
+					if err != nil {
+						return err
 					}
 				}
-			default:
-				return c2.NewErr("key type not supported " + k.String())
 			}
 			return nil
 		},
